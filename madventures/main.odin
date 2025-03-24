@@ -12,6 +12,7 @@ import "core:math/ease"
 import "core:mem"
 import "core:slice"
 import "core:strings"
+import "core:path/filepath"
 import time "core:time"
 import rand "core:math/rand"
 import json "core:encoding/json"
@@ -34,8 +35,8 @@ app_state: struct {
     last_frame_time: time.Time
 }
 
-window_w :: 1280
-window_h :: 720
+window_w :: 1024
+window_h :: 768
 
 main :: proc() {
 	sapp.run({
@@ -45,22 +46,20 @@ main :: proc() {
 		event_cb = event,
 		width = window_w,
 		height = window_h,
-		window_title = "Dummy",
+		window_title = "Maki's Adventures",
 		icon = { sokol_default = true },
 		logger = { func = slog.func },
-		win32_console_attach = false,
 	})
 }
 
 init :: proc "c" () {
 	using linalg, fmt
 	context = runtime.default_context()
-	sapp.toggle_fullscreen()
 
 	init_time = t.now()
 
 	sg.setup({
-		environment = sglue.environment(),
+        environment = sglue.environment(),
 		logger = { func = slog.func },
 		d3d11_shader_debugging = ODIN_DEBUG,
 	})
@@ -68,6 +67,12 @@ init :: proc "c" () {
 	init_images()
 	init_fonts()
 	init_sound()
+
+	load_tileset()
+
+	if !load_map("res_workbench/tiled/test_map.json") {
+	   log_error("Failed to load map")
+	}
 
 	if !ODIN_DEBUG {
 		play_sound("beat")
@@ -206,6 +211,7 @@ frame :: proc "c" () {
 
 cleanup :: proc "c" () {
 	context = runtime.default_context()
+	free_map()
 	sg.shutdown()
 }
 
@@ -577,6 +583,8 @@ Image_Id :: enum {
 	foreground,
     fmod_logo,
     maki_logo,
+
+    tileset_overworld,
 }
 
 Image :: struct {
@@ -928,10 +936,18 @@ render :: proc() {
     }
     set_coord_space(coord)
 
+    map_pos := v2{
+        game_res_w * -0.5,
+        game_res_h * -0.5,
+    }
+
+    render_map(map_pos)
+
+/*
     draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.background, z_layer = .background)
     draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.midground, z_layer = .midground)
     draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.foreground, z_layer = .foreground)
-
+*/
 	gs.ticks += 1
 }
 
@@ -1325,4 +1341,248 @@ aabb_contains :: proc(aabb: Vector4, p: Vector2) -> bool {
 
 aabb_size :: proc(aabb: AABB) -> Vector2 {
 	return { abs(aabb.x - aabb.z), abs(aabb.y - aabb.w) }
+}
+
+// :tilemap
+
+Tile_Map :: struct {
+    width, height: int,
+    tile_width, tile_height: int,
+    render_width, render_height: int,
+    layers: []Tile_Layer,
+    tileset_image_id: Image_Id,
+    tileset_columns: int,
+    tileset_tile_width, tileset_tile_height: int,
+    tileset_tile_count: int,
+    first_gid: int,
+    loaded: bool,
+}
+
+Tile_Layer :: struct {
+    name: string,
+    data: []int,
+    width, height: int,
+    visible: bool,
+}
+
+Tiled_Layer_Json :: struct {
+    name: string,
+    data: []int,
+    width, height: int,
+    visible: bool,
+    type: bool,
+}
+
+Tiled_Map_Json :: struct {
+    width, height: int,
+    tilewidth, tileheight: int,
+    layers: []Tiled_Layer_Json,
+    tilesets: []Tiled_Tileset_Json,
+}
+
+Tiled_Tileset_Json :: struct {
+    firstgid: int,
+    source: string,
+}
+
+Tiled_Tileset_XML :: struct {
+    name: string,
+    tilewidth, tileheight: int,
+    tilecount: int,
+    columns: int,
+    image_souce: string,
+}
+
+current_map: Tile_Map
+
+load_map :: proc(path: string) -> bool {
+    json_data, read_ok := os.read_entire_file(path)
+    if !read_ok {
+        fmt.println("Failed to read map file: ", path)
+        return false
+    }
+
+    defer delete(json_data)
+
+    game_map := &current_map
+
+    tiled_map: Tiled_Map_Json
+    json_err := json.unmarshal(json_data, &tiled_map)
+    if json_err != nil {
+        fmt.println("Failed to parse map JSON: ", json_err)
+        return false
+    }
+
+    game_map.width = tiled_map.width
+    game_map.height = tiled_map.height
+    game_map.tile_width = tiled_map.tilewidth
+    game_map.tile_height = tiled_map.tileheight
+    game_map.render_width = 32
+    game_map.render_height = 32
+
+    if game_map.layers != nil {
+        for layer in game_map.layers {
+            delete(layer.name)
+            delete(layer.data)
+        }
+
+        delete(game_map.layers)
+    }
+
+    game_map.layers = make([]Tile_Layer, 0, len(tiled_map.layers))
+    for layer in tiled_map.layers {
+        if layer.type != "tilelayer" {
+            continue
+        }
+
+        new_layer := Tile_Layer {
+            name = strings.clone(layer.name),
+            data = make([]int, len(layer.data)),
+            width = layer.width,
+            height = layer.height,
+            visible = layer.visible
+        }
+
+        copy(new_layer.data, layer.data)
+        append(&game_map.layers, new_layer)
+    }
+
+    if len(tiled_map.tilesets > 0) {
+        game_map.first_gid = tiled_map.tilesets[0].firstgid
+
+        // hardcoded, later parse tsx file.
+        game_map.tileset_tile_width = 8
+        game_map.tileset_tile_height = 8
+        game_map.tileset_columns = 24
+        game_map.tileset_tile_count = 2232
+        game_map.tileset_image_id = .tileset_overworld
+    }
+
+    game_map.loaded = true
+    return true
+}
+
+get_tile_at :: proc(x, y: int) -> int {
+    game_map := &current_map
+
+    if !game_map.loaded || x < 0 || y < 0 || x > game_map.width || y >= game_map.height {
+        return 0
+    }
+
+    if len(game_map.layers) > 0 {
+        layer := game_map.layers[0]
+        index := y * game_map.width + x
+        if index < len(layer.data) {
+            return layer.data[index]
+        }
+    }
+
+    return 0
+}
+
+render_map :: proc(position: Vector2) {
+    game_map := &current_map
+
+    if !game_map.loaded || game_map.tileset_image_id == .nil {
+        return
+    }
+
+    for layer in game_map.layers {
+        if !layer.visible {
+            continue
+        }
+
+        for y in 0..<game_map.height {
+            for x in 0..<game_map.width {
+                index := y * game_map.width + x
+                if index >= len(layer.data) {
+                    continue
+                }
+
+                tile_index := layer.data[index]
+                if tile_index == 0 {
+                    continue
+                }
+
+                tileset_index := tile_index - game_map.first_gid
+                tileset_col := tileset_index % game_map.tileset_columns
+                tileset_row := tileset_index / game_map.tileset_columns
+
+                atlas_uvs := images[game_map.tileset_image_id].atlas_uvs
+                img_width := f32(images[game_map.tileset_image_id].width)
+                img_height := f32(images[game_map.tileset_image_id].height)
+
+                tile_width_rel := f32(game_map.tileset_tile_width) / img_width
+                tile_height_rel := f32(game_map.tileset_tile_height) / img_height
+
+                uv_width := (atlas_uvs.z - atlas_uvs.x) * tile_width_rel
+                uv_height := (atlas_uvs.w - atlas_uvs.y) * tile_height_rel
+
+                u1 := atlas_uvs.x + (atlas_uvs.z - atlas_uvs.x) * (f32(tileset_col) * tile_width_rel)
+                v1 := atlas_uvs.y + (atlas_uvs.w - atlas_uvs.y) * (f32(tileset_row) * tile_height_rel)
+                u2 := u1 + uv_width
+                v2 := v1 + uv_height
+
+                tile_pos := position + {
+                    f32(x * game_map.render_width),
+                    f32(y * game_map.render_height),
+                }
+
+                draw_rect_aabb(
+                    tile_pos,
+                    {f32(game_map.render_width), f32(game_map.render_height)},
+                    uv = {u1, v1, u2, v2},
+                    img_id = game_map.tileset_image_id,
+                    z_layer = .background,
+                )
+            }
+        }
+    }
+}
+
+free_map :: proc() {
+    game_map := &current_map
+
+    if game_map.layers != nil {
+        for layer in game_map.layers {
+            delete(layer.name)
+            delete(layer.data)
+        }
+        delete(game_map.layers)
+        game_map.layers = nil
+    }
+
+    game_map.loaded = false
+}
+
+load_tileset :: proc() -> bool {
+    tileset_path := "C:/Users/matif/Downloads/Mini-Medieval-8x8/Overworld.png"
+
+    png_data, succ := os.read_entire_file(tileset_path)
+    if !succ {
+        log_error("Failed to load tileset image:", tileset_path)
+        return false
+    }
+
+    stbi.set_flip_vertically_on_load(1)
+    width, height, channels: i32
+    img_data := stbi.load_from_memory(raw_data(png_data), auto_cast len(png_data), &width, &height, &channels, 4)
+
+    if img_data == nil {
+        log_error("Failed to decode tileset image")
+        return false
+    }
+
+    img : Image
+    img.width = width
+    img.height = height
+    img.data = img_data
+
+    images[.tileset_overworld] = img
+
+    if int(.tileset_overworld) > image_count - 1 {
+        image_count = int(.tileset_overworld) + 1
+    }
+
+    return true
 }
