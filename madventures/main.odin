@@ -64,11 +64,12 @@ init :: proc "c" () {
 		d3d11_shader_debugging = ODIN_DEBUG,
 	})
 
+	load_tileset()
+
 	init_images()
 	init_fonts()
 	init_sound()
 
-	load_tileset()
 
 	if !load_map("res_workbench/tiled/test_map.json") {
 	   log_error("Failed to load map")
@@ -1370,7 +1371,7 @@ Tiled_Layer_Json :: struct {
     data: []int,
     width, height: int,
     visible: bool,
-    type: bool,
+    type: string,  // This must be a string, not a bool
 }
 
 Tiled_Map_Json :: struct {
@@ -1396,12 +1397,13 @@ Tiled_Tileset_XML :: struct {
 current_map: Tile_Map
 
 load_map :: proc(path: string) -> bool {
+    fmt.println("Attempting to load map from:", path)
+
     json_data, read_ok := os.read_entire_file(path)
     if !read_ok {
-        fmt.println("Failed to read map file: ", path)
+        fmt.println("Failed to read map file:", path)
         return false
     }
-
     defer delete(json_data)
 
     game_map := &current_map
@@ -1409,9 +1411,11 @@ load_map :: proc(path: string) -> bool {
     tiled_map: Tiled_Map_Json
     json_err := json.unmarshal(json_data, &tiled_map)
     if json_err != nil {
-        fmt.println("Failed to parse map JSON: ", json_err)
+        fmt.println("Failed to parse map JSON:", json_err)
         return false
     }
+    fmt.println("Map loaded successfully. Size:", tiled_map.width, "x", tiled_map.height)
+    fmt.println("Number of layers:", len(tiled_map.layers))
 
     game_map.width = tiled_map.width
     game_map.height = tiled_map.height
@@ -1425,38 +1429,45 @@ load_map :: proc(path: string) -> bool {
             delete(layer.name)
             delete(layer.data)
         }
-
         delete(game_map.layers)
     }
 
-    game_map.layers = make([]Tile_Layer, 0, len(tiled_map.layers))
+    tile_layer_count := 0
     for layer in tiled_map.layers {
-        if layer.type != "tilelayer" {
-            continue
+        if layer.type == "tilelayer" {
+            tile_layer_count += 1
         }
-
-        new_layer := Tile_Layer {
-            name = strings.clone(layer.name),
-            data = make([]int, len(layer.data)),
-            width = layer.width,
-            height = layer.height,
-            visible = layer.visible
-        }
-
-        copy(new_layer.data, layer.data)
-        append(&game_map.layers, new_layer)
     }
 
-    if len(tiled_map.tilesets > 0) {
+    game_map.layers = make([]Tile_Layer, tile_layer_count)
+
+    layer_index := 0
+    for layer in tiled_map.layers {
+        if layer.type == "tilelayer" {
+            game_map.layers[layer_index] = Tile_Layer{
+                name = strings.clone(layer.name),
+                data = make([]int, len(layer.data)),
+                width = layer.width,
+                height = layer.height,
+                visible = layer.visible,
+            }
+            copy(game_map.layers[layer_index].data, layer.data)
+            layer_index += 1
+        }
+    }
+
+    if len(tiled_map.tilesets) > 0 {
         game_map.first_gid = tiled_map.tilesets[0].firstgid
 
-        // hardcoded, later parse tsx file.
         game_map.tileset_tile_width = 8
         game_map.tileset_tile_height = 8
         game_map.tileset_columns = 24
         game_map.tileset_tile_count = 2232
         game_map.tileset_image_id = .tileset_overworld
     }
+
+    fmt.println("Map processed. Layers:", len(game_map.layers))
+    fmt.println("First GID:", game_map.first_gid)
 
     game_map.loaded = true
     return true
@@ -1483,9 +1494,21 @@ get_tile_at :: proc(x, y: int) -> int {
 render_map :: proc(position: Vector2) {
     game_map := &current_map
 
-    if !game_map.loaded || game_map.tileset_image_id == .nil {
+    if !game_map.loaded {
+        fmt.println("Map not loaded, can't render")
         return
     }
+
+    if game_map.tileset_image_id == .nil {
+        fmt.println("No tileset image ID, can't render")
+        return
+    }
+
+    fmt.println("Rendering map at position:", position)
+    fmt.println("Map dimensions:", game_map.width, "x", game_map.height)
+    fmt.println("Layers to render:", len(game_map.layers))
+
+    tile_count := 0
 
     for layer in game_map.layers {
         if !layer.visible {
@@ -1503,6 +1526,8 @@ render_map :: proc(position: Vector2) {
                 if tile_index == 0 {
                     continue
                 }
+
+                tile_count += 1
 
                 tileset_index := tile_index - game_map.first_gid
                 tileset_col := tileset_index % game_map.tileset_columns
@@ -1538,6 +1563,8 @@ render_map :: proc(position: Vector2) {
             }
         }
     }
+
+    fmt.println("Total tiles rendered:", tile_count)
 }
 
 free_map :: proc() {
@@ -1556,7 +1583,10 @@ free_map :: proc() {
 }
 
 load_tileset :: proc() -> bool {
+    // Ensure tileset_overworld is defined in Image_Id enum
     tileset_path := "C:/Users/matif/Downloads/Mini-Medieval-8x8/Overworld.png"
+
+    fmt.println("Loading tileset from:", tileset_path)
 
     png_data, succ := os.read_entire_file(tileset_path)
     if !succ {
@@ -1573,16 +1603,23 @@ load_tileset :: proc() -> bool {
         return false
     }
 
+    fmt.println("Tileset loaded successfully:", width, "x", height)
+
     img : Image
     img.width = width
     img.height = height
     img.data = img_data
 
-    images[.tileset_overworld] = img
+    // Make sure Image_Id includes tileset_overworld
+    id := Image_Id.tileset_overworld
+    images[id] = img
 
-    if int(.tileset_overworld) > image_count - 1 {
-        image_count = int(.tileset_overworld) + 1
+    // Update the highest ID if needed
+    if int(id) > image_count - 1 {
+        image_count = int(id) + 1
     }
+
+    fmt.println("Tileset assigned to image ID:", id)
 
     return true
 }
