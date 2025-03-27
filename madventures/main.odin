@@ -1494,19 +1494,10 @@ get_tile_at :: proc(x, y: int) -> int {
 render_map :: proc(position: Vector2) {
     game_map := &current_map
 
-    if !game_map.loaded {
-        fmt.println("Map not loaded, can't render")
+    if !game_map.loaded || game_map.tileset_image_id == .nil {
+        fmt.println("Map not loaded or no tileset, can't render")
         return
     }
-
-    if game_map.tileset_image_id == .nil {
-        fmt.println("No tileset image ID, can't render")
-        return
-    }
-
-    fmt.println("Rendering map at position:", position)
-    fmt.println("Map dimensions:", game_map.width, "x", game_map.height)
-    fmt.println("Layers to render:", len(game_map.layers))
 
     tile_count := 0
 
@@ -1529,17 +1520,26 @@ render_map :: proc(position: Vector2) {
 
                 tile_count += 1
 
+                // Calculate the tile position in the tileset
                 tileset_index := tile_index - game_map.first_gid
                 tileset_col := tileset_index % game_map.tileset_columns
-                tileset_row := tileset_index / game_map.tileset_columns
 
+                // Calculate the correct row based on the tileset columns and count
+                // The key fix: calculate row from top to bottom
+                rows_in_tileset := (game_map.tileset_tile_count + game_map.tileset_columns - 1) / game_map.tileset_columns
+                tileset_row := rows_in_tileset - 1 - (tileset_index / game_map.tileset_columns)
+
+
+                // Get the atlas UVs for the tileset image
                 atlas_uvs := images[game_map.tileset_image_id].atlas_uvs
                 img_width := f32(images[game_map.tileset_image_id].width)
                 img_height := f32(images[game_map.tileset_image_id].height)
 
+                // Calculate the tile's relative size within the image
                 tile_width_rel := f32(game_map.tileset_tile_width) / img_width
                 tile_height_rel := f32(game_map.tileset_tile_height) / img_height
 
+                // Calculate the UV coordinates for this specific tile
                 uv_width := (atlas_uvs.z - atlas_uvs.x) * tile_width_rel
                 uv_height := (atlas_uvs.w - atlas_uvs.y) * tile_height_rel
 
@@ -1548,6 +1548,7 @@ render_map :: proc(position: Vector2) {
                 u2 := u1 + uv_width
                 v2 := v1 + uv_height
 
+                // Calculate pixel position for this tile
                 tile_pos := position + {
                     f32(x * game_map.render_width),
                     f32(y * game_map.render_height),
@@ -1563,8 +1564,6 @@ render_map :: proc(position: Vector2) {
             }
         }
     }
-
-    fmt.println("Total tiles rendered:", tile_count)
 }
 
 free_map :: proc() {
@@ -1614,7 +1613,6 @@ load_tileset :: proc() -> bool {
     id := Image_Id.tileset_overworld
     images[id] = img
 
-    // Update the highest ID if needed
     if int(id) > image_count - 1 {
         image_count = int(id) + 1
     }
