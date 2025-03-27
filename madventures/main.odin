@@ -1491,6 +1491,17 @@ get_tile_at :: proc(x, y: int) -> int {
     return 0
 }
 
+Map_Orientation :: enum {
+    Standard,       // Original rendering (x, y)
+    Flipped_X,      // Flip along X axis (width-x-1, y)
+    Flipped_Y,      // Flip along Y axis (x, height-y-1)
+    Flipped_Both,   // Flip along both axes - 180° rotation (width-x-1, height-y-1)
+    Transposed,     // Transpose X and Y - 90° + flip (y, x)
+    Transposed_Alt, // Alternate transposition - 90° rotation (y, width-x-1)
+}
+
+map_orientation := Map_Orientation.Flipped_Y
+
 render_map :: proc(position: Vector2) {
     game_map := &current_map
 
@@ -1508,7 +1519,30 @@ render_map :: proc(position: Vector2) {
 
         for y in 0..<game_map.height {
             for x in 0..<game_map.width {
-                index := y * game_map.width + x
+                map_x, map_y := x, y
+
+                #partial switch map_orientation {
+                    case .Standard:
+                        // Keep as is
+                        map_x, map_y = x, y
+                    case .Flipped_X:
+                        // Flip horizontal
+                        map_x, map_y = game_map.width - x - 1, y
+                    case .Flipped_Y:
+                        // Flip vertical
+                        map_x, map_y = x, game_map.height - y - 1
+                    case .Flipped_Both:
+                        // 180° rotation
+                        map_x, map_y = game_map.width - x - 1, game_map.height - y - 1
+                    case .Transposed:
+                        // 90° rotation + flip
+                        map_x, map_y = y, x
+                    case .Transposed_Alt:
+                        // 90° rotation
+                        map_x, map_y = y, game_map.width - x - 1
+                }
+
+                index := map_y * game_map.width + map_x
                 if index >= len(layer.data) {
                     continue
                 }
@@ -1520,26 +1554,19 @@ render_map :: proc(position: Vector2) {
 
                 tile_count += 1
 
-                // Calculate the tile position in the tileset
                 tileset_index := tile_index - game_map.first_gid
                 tileset_col := tileset_index % game_map.tileset_columns
 
-                // Calculate the correct row based on the tileset columns and count
-                // The key fix: calculate row from top to bottom
                 rows_in_tileset := (game_map.tileset_tile_count + game_map.tileset_columns - 1) / game_map.tileset_columns
                 tileset_row := rows_in_tileset - 1 - (tileset_index / game_map.tileset_columns)
 
-
-                // Get the atlas UVs for the tileset image
                 atlas_uvs := images[game_map.tileset_image_id].atlas_uvs
                 img_width := f32(images[game_map.tileset_image_id].width)
                 img_height := f32(images[game_map.tileset_image_id].height)
 
-                // Calculate the tile's relative size within the image
                 tile_width_rel := f32(game_map.tileset_tile_width) / img_width
                 tile_height_rel := f32(game_map.tileset_tile_height) / img_height
 
-                // Calculate the UV coordinates for this specific tile
                 uv_width := (atlas_uvs.z - atlas_uvs.x) * tile_width_rel
                 uv_height := (atlas_uvs.w - atlas_uvs.y) * tile_height_rel
 
@@ -1548,7 +1575,6 @@ render_map :: proc(position: Vector2) {
                 u2 := u1 + uv_width
                 v2 := v1 + uv_height
 
-                // Calculate pixel position for this tile
                 tile_pos := position + {
                     f32(x * game_map.render_width),
                     f32(y * game_map.render_height),
@@ -1582,10 +1608,7 @@ free_map :: proc() {
 }
 
 load_tileset :: proc() -> bool {
-    // Ensure tileset_overworld is defined in Image_Id enum
     tileset_path := "C:/Users/matif/Downloads/Mini-Medieval-8x8/Overworld.png"
-
-    fmt.println("Loading tileset from:", tileset_path)
 
     png_data, succ := os.read_entire_file(tileset_path)
     if !succ {
@@ -1602,22 +1625,17 @@ load_tileset :: proc() -> bool {
         return false
     }
 
-    fmt.println("Tileset loaded successfully:", width, "x", height)
-
     img : Image
     img.width = width
     img.height = height
     img.data = img_data
 
-    // Make sure Image_Id includes tileset_overworld
     id := Image_Id.tileset_overworld
     images[id] = img
 
     if int(id) > image_count - 1 {
         image_count = int(id) + 1
     }
-
-    fmt.println("Tileset assigned to image ID:", id)
 
     return true
 }
