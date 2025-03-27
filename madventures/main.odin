@@ -904,8 +904,8 @@ get_delta_time :: proc() -> f64 {
     return time.duration_seconds(time.diff(app_state.last_frame_time, time.now()))
 }
 
-game_res_w :: 1280
-game_res_h :: 720
+game_res_w :: 1024
+game_res_h :: 768
 
 update :: proc(dt: f64) {
 	using linalg
@@ -944,11 +944,6 @@ render :: proc() {
 
     render_map(map_pos)
 
-/*
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.background, z_layer = .background)
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.midground, z_layer = .midground)
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.foreground, z_layer = .foreground)
-*/
 	gs.ticks += 1
 }
 
