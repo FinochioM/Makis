@@ -1369,6 +1369,7 @@ Tile_Map :: struct {
     tileset_tile_count: int,
     first_gid: int,
     loaded: bool,
+    tileset_collisions: map[int][]Collision_Shape,
 }
 
 Tile_Layer :: struct {
@@ -1383,7 +1384,7 @@ Tiled_Layer_Json :: struct {
     data: []int,
     width, height: int,
     visible: bool,
-    type: string,  // This must be a string, not a bool
+    type: string,
 }
 
 Tiled_Map_Json :: struct {
@@ -1404,6 +1405,44 @@ Tiled_Tileset_XML :: struct {
     tilecount: int,
     columns: int,
     image_souce: string,
+}
+
+Collision_Shape :: struct {
+    type: enum {
+        Rectangle,
+        Polygon,
+        Ellipse,
+        Point,
+    },
+    x, y: f32,
+    width, height: f32,
+    points: []Vector2,
+}
+
+Tiled_Tileset_Tsx :: struct {
+    name: string,
+    tilewidth, tileheight: int,
+    tilecount: int,
+    columns: int,
+    image_source: string,
+    tiles: []Tiled_Tile,
+}
+
+Tiled_Tile :: struct {
+    id: int,
+    objectgroup: Tiled_Objectgroup,
+}
+
+Tiled_Objectgroup :: struct {
+    objects: []Tiled_Object,
+}
+
+Tiled_Object :: struct {
+    id: int,
+    x, y: f32,
+    width, height: f32,
+    object_type: string,
+    polygon_points: string,
 }
 
 current_map: Tile_Map
@@ -1468,20 +1507,19 @@ load_map :: proc(path: string) -> bool {
         }
     }
 
-    if len(tiled_map.tilesets) > 0 {
-        game_map.first_gid = tiled_map.tilesets[0].firstgid
+    if len(tiled_map.tilesets) > 0 && tiled_map.tilesets[0].source != "" {
+        dir_path := filepath.dir(path)
+        tsx_path := filepath.join({dir_path, tiled_map.tilesets[0].source})
 
-        game_map.tileset_tile_width = 8
-        game_map.tileset_tile_height = 8
-        game_map.tileset_columns = 24
-        game_map.tileset_tile_count = 2232
-        game_map.tileset_image_id = .tileset_overworld
+        collisions, ok := load_tileset_collisions(tsx_path)
+        if ok {
+            current_map.tileset_collisions = collisions
+            fmt.println("Loaded collision data for", len(collisions), "tiles")
+        } else {
+            fmt.println("Failed to load collision data from:", tsx_path)
+        }
     }
 
-    fmt.println("Map processed. Layers:", len(game_map.layers))
-    fmt.println("First GID:", game_map.first_gid)
-
-    game_map.loaded = true
     return true
 }
 
@@ -1616,6 +1654,19 @@ free_map :: proc() {
         game_map.layers = nil
     }
 
+    if game_map.tileset_collisions != nil {
+        for _, shapes in game_map.tileset_collisions {
+            for shape in shapes {
+                if shape.points != nil {
+                    delete(shape.points)
+                }
+            }
+            delete(shapes)
+        }
+        delete(game_map.tileset_collisions)
+        game_map.tileset_collisions = nil
+    }
+
     game_map.loaded = false
 }
 
@@ -1650,4 +1701,142 @@ load_tileset :: proc() -> bool {
     }
 
     return true
+}
+
+load_tileset_collisions :: proc(tsx_path: string) -> (map[int][]Collision_Shape, bool) {
+    collisions := make(map[int][]Collision_Shape)
+
+    tsx_data, ok := os.read_entire_file(tsx_path)
+    if !ok {
+        fmt.println("Failed to read tileset file:", tsx_path)
+        return collisions, false
+    }
+    defer delete(tsx_data)
+
+    data := string(tsx_data)
+
+    tile_start := 0
+    for {
+        tile_start = strings.index_string(data[tile_start:], "<tile id=")
+        if tile_start < 0 do break
+
+        id_start := tile_start + strings.index_string(data[tile_start:], "id=\"") + 4
+        id_end := id_start + strings.index_string(data[id_start:], "\"")
+        id_str := data[id_start:id_end]
+        tile_id, _ := strconv.parse_int(id_str, 10)
+
+        objectgroup_start := tile_start + strings.index_string(data[tile_start:], "<objectgroup")
+        if objectgroup_start < 0 || objectgroup_start > (tile_start + strings.index_string(data[tile_start:], "</tile>")) {
+            tile_start += 1
+            continue
+        }
+
+        object_pos := objectgroup_start
+        shapes := make([dynamic]Collision_Shape)
+
+        for {
+            object_pos = objectgroup_start + strings.index_string(data[objectgroup_start:], "<object ")
+            if object_pos < 0 || object_pos > (tile_start + strings.index_string(data[tile_start:], "</tile>")) do break
+
+            x_attr := parse_xml_attribute(data[object_pos:], "x")
+            y_attr := parse_xml_attribute(data[object_pos:], "y")
+            w_attr := parse_xml_attribute(data[object_pos:], "width")
+            h_attr := parse_xml_attribute(data[object_pos:], "height")
+
+            x, _ := strconv.parse_f32(x_attr)
+            y, _ := strconv.parse_f32(y_attr)
+            width, _ := strconv.parse_f32(w_attr)
+            height, _ := strconv.parse_f32(h_attr)
+
+            shape_type := Collision_Shape.Type.Rectangle
+
+            polygon_attr := parse_xml_attribute(data[object_pos:], "points")
+            polygon_points: [dynamic]Vector2
+
+            if polygon_attr != "" {
+                shape_type = .Polygon
+
+                point_pairs := strings.split(polygon_attr, " ")
+                for pair in point_pairs {
+                    coords := strings.split(pair, ",")
+                    if len(coords) == 2 {
+                        px, _ := strconv.parse_f32(coords[0])
+                        py, _ := strconv.parse_f32(coords[1])
+                        append(&polygon_points, Vector2{px, py})
+                    }
+                }
+            }
+
+            shape := Collision_Shape{
+                type = shape_type,
+                x = x,
+                y = y,
+                width = width,
+                height = height,
+            }
+
+            if shape_type == .Polygon {
+                shape.points = make([]Vector2, len(polygon_points))
+                for p, i in polygon_points {
+                    shape.points[i] = p
+                }
+            }
+
+            append(&shapes, shape)
+            objectgroup_start = object_pos + 1
+        }
+
+        if len(shapes) > 0 {
+            collisions[tile_id] = make([]Collision_Shape, len(shapes))
+            for shape, i in shapes {
+                collisions[tile_id][i] = shape
+            }
+        }
+
+        delete(shapes)
+        tile_start += 1
+    }
+
+    return collisions, true
+}
+
+parse_xml_attribute :: proc(xml: string, attr_name: string) -> string {
+    attr_search := fmt.tprintf("%s=\"", attr_name)
+    attr_start := strings.index_string(xml, attr_search)
+    if attr_start < 0 do return ""
+
+    attr_start += len(attr_search)
+    attr_end := attr_start + strings.index_string(xml[attr_start:], "\"")
+
+    return xml[attr_start:attr_end]
+}
+
+has_collision :: proc(tile_id: int) -> bool {
+    game_map := &current_map
+
+    if !game_map.loaded {
+        return false
+    }
+
+    adjusted_id := tile_id - game_map.first_gid
+
+    shapes, exists := game_map.tileset_collisions[adjusted_id]
+    return exists && len(shapes) > 0
+}
+
+get_tile_collision_shapes :: proc(tile_id: int) -> []Collision_Shape {
+    game_map := &current_map
+
+    if !game_map.loaded {
+        return nil
+    }
+
+    adjusted_id := tile_id - game_map.first_gid
+
+    return game_map.tileset_collisions[adjusted_id]
+}
+
+is_tile_solid :: proc(x, y: int) -> bool {
+    tile_id := get_tile_at(x, y)
+    return has_collision(tile_id)
 }
