@@ -1475,7 +1475,7 @@ load_map :: proc(path: string) -> bool {
     game_map.height = tiled_map.height
     game_map.tile_width = tiled_map.tilewidth
     game_map.tile_height = tiled_map.tileheight
-    game_map.render_width = 32
+    game_map.render_width = 32  // Keep render size at 32x32
     game_map.render_height = 32
 
     if game_map.layers != nil {
@@ -1510,21 +1510,45 @@ load_map :: proc(path: string) -> bool {
         }
     }
 
-    if len(tiled_map.tilesets) > 0 && len(tiled_map.tilesets[0].source) > 0 {
-        // Construct the TSX file path from the tileset source
-        dir_path := filepath.dir(path)
-        tsx_path := filepath.join({dir_path, tiled_map.tilesets[0].source})
+    if len(tiled_map.tilesets) > 0 {
+        game_map.first_gid = tiled_map.tilesets[0].firstgid
+        game_map.tileset_image_id = .tileset_overworld
 
-        collisions, ok := load_tileset_collisions(tsx_path)
-        if ok {
-            current_map.tileset_collisions = collisions
-            fmt.println("Loaded collision data for", len(collisions), "tiles")
-        } else {
-            fmt.println("Failed to load collision data from:", tsx_path)
+        game_map.tileset_tile_width = 8
+        game_map.tileset_tile_height = 8
+
+        tileset_img := images[game_map.tileset_image_id]
+        game_map.tileset_columns = int(tileset_img.width) / game_map.tileset_tile_width
+
+        game_map.tileset_tile_count = int(tileset_img.width / i32(game_map.tileset_tile_width)) *
+                                     int(tileset_img.height / i32(game_map.tileset_tile_height))
+
+        if len(tiled_map.tilesets[0].source) > 0 {
+            dir_path := filepath.dir(path)
+            tsx_path := filepath.join({dir_path, tiled_map.tilesets[0].source})
+
+            collisions, ok := load_tileset_collisions(tsx_path)
+            if ok {
+                if game_map.tileset_collisions != nil {
+                    for _, shapes in game_map.tileset_collisions {
+                        for shape in shapes {
+                            if shape.points != nil {
+                                delete(shape.points)
+                            }
+                        }
+                        delete(shapes)
+                    }
+                    delete(game_map.tileset_collisions)
+                }
+
+                game_map.tileset_collisions = collisions
+            } else {
+                fmt.println("Failed to load collision data from:", tsx_path)
+            }
         }
     }
 
-    // Keep your existing return statement
+    game_map.loaded = true
     return true
 }
 
@@ -1578,22 +1602,16 @@ render_map :: proc(position: Vector2) {
 
                 #partial switch map_orientation {
                     case .Standard:
-                        // Keep as is
                         map_x, map_y = x, y
                     case .Flipped_X:
-                        // Flip horizontal
                         map_x, map_y = game_map.width - x - 1, y
                     case .Flipped_Y:
-                        // Flip vertical
                         map_x, map_y = x, game_map.height - y - 1
                     case .Flipped_Both:
-                        // 180° rotation
                         map_x, map_y = game_map.width - x - 1, game_map.height - y - 1
                     case .Transposed:
-                        // 90° rotation + flip
                         map_x, map_y = y, x
                     case .Transposed_Alt:
-                        // 90° rotation
                         map_x, map_y = y, game_map.width - x - 1
                 }
 
@@ -1610,25 +1628,25 @@ render_map :: proc(position: Vector2) {
                 tile_count += 1
 
                 tileset_index := tile_index - game_map.first_gid
+
                 tileset_col := tileset_index % game_map.tileset_columns
 
-                rows_in_tileset := (game_map.tileset_tile_count + game_map.tileset_columns - 1) / game_map.tileset_columns
-                tileset_row := rows_in_tileset - 1 - (tileset_index / game_map.tileset_columns)
+                total_rows := (game_map.tileset_tile_count + game_map.tileset_columns - 1) / game_map.tileset_columns
 
-                atlas_uvs := images[game_map.tileset_image_id].atlas_uvs
-                img_width := f32(images[game_map.tileset_image_id].width)
-                img_height := f32(images[game_map.tileset_image_id].height)
+                tileset_row := total_rows - 1 - (tileset_index / game_map.tileset_columns)
+
+                tileset_img := images[game_map.tileset_image_id]
+                atlas_uvs := tileset_img.atlas_uvs
+                img_width := f32(tileset_img.width)
+                img_height := f32(tileset_img.height)
 
                 tile_width_rel := f32(game_map.tileset_tile_width) / img_width
                 tile_height_rel := f32(game_map.tileset_tile_height) / img_height
 
-                uv_width := (atlas_uvs.z - atlas_uvs.x) * tile_width_rel
-                uv_height := (atlas_uvs.w - atlas_uvs.y) * tile_height_rel
-
                 u1 := atlas_uvs.x + (atlas_uvs.z - atlas_uvs.x) * (f32(tileset_col) * tile_width_rel)
                 v1 := atlas_uvs.y + (atlas_uvs.w - atlas_uvs.y) * (f32(tileset_row) * tile_height_rel)
-                u2 := u1 + uv_width
-                v2 := v1 + uv_height
+                u2 := u1 + tile_width_rel * (atlas_uvs.z - atlas_uvs.x)
+                v2 := v1 + tile_height_rel * (atlas_uvs.w - atlas_uvs.y)
 
                 tile_pos := position + {
                     f32(x * game_map.render_width),
@@ -1676,7 +1694,8 @@ free_map :: proc() {
 }
 
 load_tileset :: proc() -> bool {
-    tileset_path := "A:/Desarrollos/Makis/res/images/tiles/Overworld.png"
+    // Use relative path instead of absolute path
+    tileset_path := "res/images/tiles/Overworld.png"
 
     png_data, succ := os.read_entire_file(tileset_path)
     if !succ {
@@ -1692,6 +1711,8 @@ load_tileset :: proc() -> bool {
         log_error("Failed to decode tileset image")
         return false
     }
+
+    fmt.println("Loaded tileset:", width, "x", height, "pixels")
 
     img : Image
     img.width = width
