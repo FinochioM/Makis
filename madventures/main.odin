@@ -26,6 +26,8 @@ import stbi "vendor:stb/image"
 import stbrp "vendor:stb/rect_pack"
 import stbtt "vendor:stb/truetype"
 
+import win32 "core:sys/windows"
+
 app_state: struct {
 	pass_action: sg.Pass_Action,
 	pip: sg.Pipeline,
@@ -77,6 +79,21 @@ init :: proc "c" () {
 
 	if !ODIN_DEBUG {
 		play_sound("beat")
+	}
+
+	if ODIN_OS == .Windows {
+		hwnd := sapp.win32_get_hwnd()
+		if hwnd != nil {
+			style := win32.GetWindowLongPtrW(auto_cast hwnd, win32.GWL_STYLE)
+
+			style &= auto_cast ~win32.WS_SIZEBOX
+			style &= auto_cast ~win32.WS_MAXIMIZEBOX
+
+			win32.SetWindowLongPtrW(auto_cast hwnd, win32.GWL_STYLE, style)
+
+			win32.SetWindowPos(auto_cast hwnd, nil, 0, 0, window_w, window_h,
+				win32.SWP_NOMOVE | win32.SWP_NOZORDER | win32.SWP_FRAMECHANGED)
+		}
 	}
 
 	// :init
