@@ -78,6 +78,7 @@ init :: proc "c" () {
 	   log_error("Failed to load map")
 	}
 
+
 	if !ODIN_DEBUG {
 		play_sound("beat")
 	}
@@ -99,6 +100,8 @@ init :: proc "c" () {
 
 	// :init
 	gs = &app_state.game
+
+	init_game()
 
     for &e, kind in entity_data {
         setup_entity(&e, kind)
@@ -604,6 +607,7 @@ Image_Id :: enum {
     maki_logo,
 
     tileset_overworld,
+    player,
 }
 
 Image :: struct {
@@ -912,6 +916,10 @@ Game_State :: struct {
 }
 gs: ^Game_State
 
+init_game :: proc() {
+    gs.player_handle = init_player()
+}
+
 // :update
 
 get_player :: proc() -> ^Entity {
@@ -961,6 +969,7 @@ render :: proc() {
     }
 
     render_map(map_pos)
+	render_player(map_pos)
 
 	gs.ticks += 1
 }
@@ -1011,6 +1020,7 @@ Entity_Flags :: enum {
 
 Entity_Kind :: enum {
 	nil,
+	Player,
 }
 
 Entity :: struct {
@@ -1071,7 +1081,10 @@ entity_destroy :: proc(entity: ^Entity, dt: f32 = 0) {
 }
 
 setup_entity :: proc(e: ^Entity, kind: Entity_Kind){
-    // SOMETHING
+	#partial switch kind {
+		case .Player:
+			// SOMETHING
+	}
 }
 
 
@@ -1891,4 +1904,41 @@ get_tile_collision_shapes :: proc(tile_id: int) -> []Collision_Shape {
 is_tile_solid :: proc(x, y: int) -> bool {
     tile_id := get_tile_at(x, y)
     return has_collision(tile_id)
+}
+
+//
+// :player
+
+init_player :: proc() -> Entity_Handle {
+    player := entity_create()
+    if player == nil {
+        log_error("Failed to create player entity")
+        return {}
+    }
+
+    player.kind = .Player
+
+    player.pos = v2{5, 5}
+
+    return entity_to_handle(player^)
+}
+
+render_player :: proc(map_pos: Vector2) {
+    player := get_player()
+    if player == nil {
+        return
+    }
+
+    grid_pos := v2{
+        map_pos.x + player.pos.x * f32(current_map.render_width),
+        map_pos.y + player.pos.y * f32(current_map.render_height)
+    }
+
+    draw_sprite_with_size(
+        grid_pos,
+        v2{1, 1},
+        .player,
+        pivot = .bottom_left,
+        z_layer = .player
+    )
 }
