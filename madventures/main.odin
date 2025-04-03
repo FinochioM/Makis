@@ -27,6 +27,7 @@ import stbrp "vendor:stb/rect_pack"
 import stbtt "vendor:stb/truetype"
 
 import win32 "core:sys/windows"
+import strconv "core:strconv"
 
 app_state: struct {
 	pass_action: sg.Pass_Action,
@@ -1407,13 +1408,15 @@ Tiled_Tileset_XML :: struct {
     image_souce: string,
 }
 
+Shape_Type :: enum {
+    Rectangle,
+    Polygon,
+    Ellipse,
+    Point,
+}
+
 Collision_Shape :: struct {
-    type: enum {
-        Rectangle,
-        Polygon,
-        Ellipse,
-        Point,
-    },
+    shape_type: Shape_Type,
     x, y: f32,
     width, height: f32,
     points: []Vector2,
@@ -1507,7 +1510,8 @@ load_map :: proc(path: string) -> bool {
         }
     }
 
-    if len(tiled_map.tilesets) > 0 && tiled_map.tilesets[0].source != "" {
+    if len(tiled_map.tilesets) > 0 && len(tiled_map.tilesets[0].source) > 0 {
+        // Construct the TSX file path from the tileset source
         dir_path := filepath.dir(path)
         tsx_path := filepath.join({dir_path, tiled_map.tilesets[0].source})
 
@@ -1520,6 +1524,7 @@ load_map :: proc(path: string) -> bool {
         }
     }
 
+    // Keep your existing return statement
     return true
 }
 
@@ -1671,7 +1676,7 @@ free_map :: proc() {
 }
 
 load_tileset :: proc() -> bool {
-    tileset_path := "C:/Users/matif/Downloads/Mini-Medieval-8x8/Overworld.png"
+    tileset_path := "A:/Desarrollos/Makis/res/images/tiles/Overworld.png"
 
     png_data, succ := os.read_entire_file(tileset_path)
     if !succ {
@@ -1717,16 +1722,31 @@ load_tileset_collisions :: proc(tsx_path: string) -> (map[int][]Collision_Shape,
 
     tile_start := 0
     for {
-        tile_start = strings.index_string(data[tile_start:], "<tile id=")
-        if tile_start < 0 do break
+        next_tile := strings.index(data[tile_start:], "<tile id=")
+        if next_tile < 0 do break
+        tile_start += next_tile
 
-        id_start := tile_start + strings.index_string(data[tile_start:], "id=\"") + 4
-        id_end := id_start + strings.index_string(data[id_start:], "\"")
+        id_start := tile_start + strings.index(data[tile_start:], "id=\"") + 4
+        id_end := id_start + strings.index(data[id_start:], "\"")
         id_str := data[id_start:id_end]
-        tile_id, _ := strconv.parse_int(id_str, 10)
+        tile_id, parse_ok := strconv.parse_int(id_str)
+        if !parse_ok do continue
 
-        objectgroup_start := tile_start + strings.index_string(data[tile_start:], "<objectgroup")
-        if objectgroup_start < 0 || objectgroup_start > (tile_start + strings.index_string(data[tile_start:], "</tile>")) {
+        objectgroup_idx := strings.index(data[tile_start:], "<objectgroup")
+        if objectgroup_idx < 0 {
+            tile_start += 1
+            continue
+        }
+
+        objectgroup_start := tile_start + objectgroup_idx
+        tile_end_idx := strings.index(data[tile_start:], "</tile>")
+        if tile_end_idx < 0 {
+            tile_start += 1
+            continue
+        }
+
+        tile_end := tile_start + tile_end_idx
+        if objectgroup_start > tile_end {
             tile_start += 1
             continue
         }
@@ -1735,47 +1755,57 @@ load_tileset_collisions :: proc(tsx_path: string) -> (map[int][]Collision_Shape,
         shapes := make([dynamic]Collision_Shape)
 
         for {
-            object_pos = objectgroup_start + strings.index_string(data[objectgroup_start:], "<object ")
-            if object_pos < 0 || object_pos > (tile_start + strings.index_string(data[tile_start:], "</tile>")) do break
+            object_idx := strings.index(data[object_pos:], "<object ")
+            if object_idx < 0 do break
+
+            object_pos += object_idx
+            if object_pos > tile_end do break
 
             x_attr := parse_xml_attribute(data[object_pos:], "x")
             y_attr := parse_xml_attribute(data[object_pos:], "y")
             w_attr := parse_xml_attribute(data[object_pos:], "width")
             h_attr := parse_xml_attribute(data[object_pos:], "height")
 
-            x, _ := strconv.parse_f32(x_attr)
-            y, _ := strconv.parse_f32(y_attr)
-            width, _ := strconv.parse_f32(w_attr)
-            height, _ := strconv.parse_f32(h_attr)
+            x, x_ok := strconv.parse_f32(x_attr)
+            y, y_ok := strconv.parse_f32(y_attr)
+            width, w_ok := strconv.parse_f32(w_attr)
+            height, h_ok := strconv.parse_f32(h_attr)
 
-            shape_type := Collision_Shape.Type.Rectangle
+            if !x_ok || !y_ok || !w_ok || !h_ok {
+                object_pos += 1
+                continue
+            }
+
+            shape_type := Shape_Type.Rectangle
 
             polygon_attr := parse_xml_attribute(data[object_pos:], "points")
             polygon_points: [dynamic]Vector2
 
             if polygon_attr != "" {
-                shape_type = .Polygon
+                shape_type = Shape_Type.Polygon
 
                 point_pairs := strings.split(polygon_attr, " ")
                 for pair in point_pairs {
                     coords := strings.split(pair, ",")
                     if len(coords) == 2 {
-                        px, _ := strconv.parse_f32(coords[0])
-                        py, _ := strconv.parse_f32(coords[1])
-                        append(&polygon_points, Vector2{px, py})
+                        px, px_ok := strconv.parse_f32(coords[0])
+                        py, py_ok := strconv.parse_f32(coords[1])
+                        if px_ok && py_ok {
+                            append(&polygon_points, Vector2{px, py})
+                        }
                     }
                 }
             }
 
             shape := Collision_Shape{
-                type = shape_type,
+                shape_type = shape_type,
                 x = x,
                 y = y,
                 width = width,
                 height = height,
             }
 
-            if shape_type == .Polygon {
+            if shape_type == Shape_Type.Polygon {
                 shape.points = make([]Vector2, len(polygon_points))
                 for p, i in polygon_points {
                     shape.points[i] = p
@@ -1783,7 +1813,7 @@ load_tileset_collisions :: proc(tsx_path: string) -> (map[int][]Collision_Shape,
             }
 
             append(&shapes, shape)
-            objectgroup_start = object_pos + 1
+            object_pos += 1
         }
 
         if len(shapes) > 0 {
@@ -1802,13 +1832,14 @@ load_tileset_collisions :: proc(tsx_path: string) -> (map[int][]Collision_Shape,
 
 parse_xml_attribute :: proc(xml: string, attr_name: string) -> string {
     attr_search := fmt.tprintf("%s=\"", attr_name)
-    attr_start := strings.index_string(xml, attr_search)
-    if attr_start < 0 do return ""
+    attr_idx := strings.index(xml, attr_search)
+    if attr_idx < 0 do return ""
 
-    attr_start += len(attr_search)
-    attr_end := attr_start + strings.index_string(xml[attr_start:], "\"")
+    attr_start := attr_idx + len(attr_search)
+    attr_end_idx := strings.index(xml[attr_start:], "\"")
+    if attr_end_idx < 0 do return ""
 
-    return xml[attr_start:attr_end]
+    return xml[attr_start:attr_start + attr_end_idx]
 }
 
 has_collision :: proc(tile_id: int) -> bool {
