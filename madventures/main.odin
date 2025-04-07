@@ -70,6 +70,8 @@ init :: proc "c" () {
 	init_fonts()
 	init_sound()
 
+	init_tile_map_editor()
+
 	if !ODIN_DEBUG {
 		play_sound("beat")
 	}
@@ -922,6 +924,9 @@ update :: proc(dt: f64) {
     update_projection(int(width), int(height))
     update_sound()
 
+	update_input_state()
+	update_editor(dt)
+
 	gs.ticks += 1
 }
 
@@ -944,9 +949,7 @@ render :: proc() {
     }
     set_coord_space(coord)
 
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.background, z_layer = .background)
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.midground, z_layer = .midground)
-    draw_rect_aabb(v2{ game_res_w * -0.5, game_res_h * -0.5}, v2{game_res_w, game_res_h}, img_id=.foreground, z_layer = .foreground)
+	render_editor()
 
 	gs.ticks += 1
 }
@@ -1211,6 +1214,8 @@ Input_State_Flags :: enum {
 Input_State :: struct {
 	keys: [MAX_KEYCODES]bit_set[Input_State_Flags],
 	mouse_x, mouse_y: f32,
+	prev_mouse_x, prev_mouse_y: f32,
+	wheel_delta_x, wheel_delta_y: f32,
 }
 
 reset_input_state_for_next_frame :: proc(state: ^Input_State) {
@@ -1230,6 +1235,18 @@ key_just_released :: proc(code: Key_Code) -> bool {
 }
 key_repeat :: proc(code: Key_Code) -> bool {
 	return .repeat in app_state.input_state.keys[code]
+}
+
+update_input_state :: proc() {
+    app_state.input_state.prev_mouse_x = app_state.input_state.mouse_x
+    app_state.input_state.prev_mouse_y = app_state.input_state.mouse_y
+    app_state.input_state.wheel_delta_x = 0
+    app_state.input_state.wheel_delta_y = 0
+}
+
+handle_wheel_event :: proc(event: ^sapp.Event) {
+    app_state.input_state.wheel_delta_x = event.scroll_x
+    app_state.input_state.wheel_delta_y = event.scroll_y
 }
 
 event :: proc "c" (event: ^sapp.Event) {
@@ -1265,6 +1282,8 @@ event :: proc "c" (event: ^sapp.Event) {
 		if event.key_repeat {
 			input_state.keys[event.key_code] += { .repeat }
 		}
+		case .MOUSE_SCROLL:
+			handle_wheel_event(event)
 	}
 }
 
